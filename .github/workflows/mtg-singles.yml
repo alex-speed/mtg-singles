@@ -1,0 +1,75 @@
+# MTG singles bot: runs once a day and emails the report.
+#
+# Safe to run in production? Yes. It only reads public web pages, makes one request to
+# Scryfall for set names, and sends one email. It changes nothing in your tenant or on any
+# server. Use a personal repository for it.
+#
+# Uses the same email secrets as the sealed-product bot (MAIL_TO, MAIL_FROM, and either the
+# GRAPH_* secrets or the SMTP_* secrets), so there is nothing new to set up.
+
+name: MTG singles
+
+on:
+  schedule:
+    # GitHub cron is always UTC. 21:47 UTC is 8:17am Adelaide during daylight saving
+    # (ACDT) and 7:17am once daylight saving ends in April (ACST). This is 30 minutes after
+    # the sealed-product bot so the two never run at the same time.
+    - cron: "47 21 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Build the report but do not send the email"
+        type: boolean
+        default: true
+      quick:
+        description: "Quick test: read only 2 pages per store (about 500 listings each)"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Get the repository files
+        uses: actions/checkout@v7
+
+      - name: Install Python 3.12
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install requests
+        run: pip install requests
+
+      # Scheduled runs, and manual runs with dry_run unticked, send the email.
+      - name: Run bot and send email
+        if: ${{ github.event_name == 'schedule' || !inputs.dry_run }}
+        env:
+          MAIL_FROM: ${{ secrets.MAIL_FROM }}
+          MAIL_TO: ${{ secrets.MAIL_TO }}
+          # Option A: Microsoft Graph. Used when SMTP_HOST is not set.
+          GRAPH_TENANT_ID: ${{ secrets.GRAPH_TENANT_ID }}
+          GRAPH_CLIENT_ID: ${{ secrets.GRAPH_CLIENT_ID }}
+          GRAPH_CLIENT_SECRET: ${{ secrets.GRAPH_CLIENT_SECRET }}
+          # Option B: SMTP, for example Gmail with an app password.
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+        run: python mtg_singles_bot.py ${{ inputs.quick && '--max-pages 2' || '' }}
+
+      # Manual runs with dry_run ticked build report.html and attach it to the run.
+      - name: Run bot (dry run)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+        run: python mtg_singles_bot.py --dry-run ${{ inputs.quick && '--max-pages 2' || '' }}
+
+      - name: Attach the dry-run report
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: singles-report
+          path: report.html
